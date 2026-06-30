@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
 
@@ -70,6 +70,36 @@ const activities = ['Upholstery', 'Measuring', 'Wallpaper', 'Curtains', 'Assembl
 const contacts = ['Karel Breed', 'Mrs. Penninga', 'Sjoerd', 'Roberto', 'Arjan', 'Kitty Stoop'];
 const weeks = [23, 24, 25, 26, 27, 28];
 
+
+const defaultVisibleFields = [
+  'remarks', 'projectStatus', 'startDate', 'relation', 'planningStatus', 'projectAddress', 'workDescription', 'executionType', 'workType', 'hours', 'remaining', 'resources'
+];
+
+const fieldDefinitions = [
+  { key: 'color', label: 'Color', get: () => '' },
+  { key: 'remarks', label: 'Opmerkingen', get: c => c.remarks || c.instruction || c.description },
+  { key: 'projectStatus', label: 'Project status', get: c => c.status === 'Execution' ? 'Uitvoering' : c.status },
+  { key: 'startDate', label: 'Start datum', get: c => `${firstDate(c.date)} ${c.startTime}` },
+  { key: 'relation', label: 'Relatie', get: c => `${c.customer} ${c.projectId}` },
+  { key: 'planningStatus', label: 'Status planning', get: c => c.status === 'Execution' ? 'Gepland' : c.status },
+  { key: 'projectAddress', label: 'Project adres', get: c => c.location || 'Middenweg 522' },
+  { key: 'workDescription', label: 'Werk omschrijving', get: c => c.description },
+  { key: 'executionType', label: 'Uitvoeringstype', get: c => c.activities?.[0] || 'Service' },
+  { key: 'workType', label: 'Werk type', get: c => c.activities?.join(', ') || 'Planning' },
+  { key: 'deliveryDate', label: 'Leverdatum', get: c => lastDate(c.date) },
+  { key: 'file', label: 'File', get: c => c.backoffice ? 'Instruction linked' : '' },
+  { key: 'resources', label: 'Resources', get: c => c.resources.map(id => people[id]?.name || id).join(', ') },
+  { key: 'hours', label: 'uren2', get: c => c.hours },
+  { key: 'remaining', label: 'Resterend', get: c => c.remaining },
+  { key: 'personDays', label: 'pers/dagen', get: c => `${c.resources.length} / ${c.week}` },
+  { key: 'receiptStatus', label: 'Status Ontvangst', get: c => c.status === 'Execution' ? 'Akkoord' : 'Voorlopig' },
+  { key: 'location', label: 'Locatie', get: c => c.location },
+  { key: 'customerContact', label: 'Customer contact', get: c => c.contact || 'Karel Breed' },
+  { key: 'instructions', label: 'Instructions', get: c => c.instruction || 'Open instruction' },
+];
+
+function getField(key) { return fieldDefinitions.find(field => field.key === key); }
+
 function isoWeekStart(week, year) {
   const simple = new Date(year, 0, 1 + (week - 1) * 7);
   const day = simple.getDay() || 7;
@@ -109,6 +139,7 @@ function Card({ card, onOpen, onDragStart }) {
   return <article className={`planning-card ${card.muted ? 'muted' : ''}`} draggable onDragStart={() => onDragStart(card.id)} onClick={() => onOpen(card.id)}>
     <div className="corner-fold" />
     <h3>{card.customer} - {card.projectId}</h3>
+    <p className="card-subtitle">Planning for kitchen installation and site preparation.</p>
     <div className="chips">{card.activities.map(a => <span key={a} className={`pill ${a.toLowerCase()}`}>{a}</span>)}</div>
     <div className="data-list"><p><b>Date:</b> {card.date}</p><p><b>Start time:</b> {card.startTime}</p><p><b>End time:</b> {card.endTime}</p></div>
     <footer><span className="person-count" title={`${card.resources.length} resources`}>👥 {card.resources.length}</span><div className="resource-stack">{card.resources.map(id => <Avatar key={id} id={id} />)}</div></footer>
@@ -162,11 +193,150 @@ function DetailModal({ card, onClose, onSave }) {
     </div>
   </div>;
 }
+
+function ViewToggle({ activeView, onChange }) {
+  return <div className="view-toggle" role="group" aria-label="Planning view switcher">
+    <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => onChange('table')}>Table View</button>
+    <button type="button" className={activeView === 'card' ? 'active' : ''} onClick={() => onChange('card')}>Card View</button>
+  </div>;
+}
+
+function TableStatusBadge({ value }) {
+  const normalized = String(value || '').toLowerCase();
+  const className = normalized.includes('akkoord') || normalized.includes('gepland') ? 'green' : normalized.includes('uitvoering') ? 'teal' : normalized.includes('created') ? 'grey' : normalized.includes('afgerond') ? 'darkgrey' : 'purple';
+  return <span className={`table-status ${className}`}>{value}</span>;
+}
+
+function FieldSelectionModal({ visibleFields, onClose, onSave, onReset }) {
+  const [draftVisible, setDraftVisible] = useState(visibleFields);
+  const [leftQuery, setLeftQuery] = useState('');
+  const [rightQuery, setRightQuery] = useState('');
+  const [dragField, setDragField] = useState(null);
+  const available = fieldDefinitions.filter(field => !draftVisible.includes(field.key) && field.label.toLowerCase().includes(leftQuery.toLowerCase()));
+  const selected = draftVisible.map(getField).filter(Boolean).filter(field => field.label.toLowerCase().includes(rightQuery.toLowerCase()));
+
+  const addField = key => setDraftVisible(current => current.includes(key) ? current : [...current, key]);
+  const removeField = key => setDraftVisible(current => current.filter(item => item !== key));
+  const moveField = (key, targetKey) => {
+    setDraftVisible(current => {
+      const without = current.filter(item => item !== key);
+      const targetIndex = without.indexOf(targetKey);
+      if (targetIndex < 0) return [...without, key];
+      return [...without.slice(0, targetIndex), key, ...without.slice(targetIndex)];
+    });
+  };
+
+  const onDropSelected = targetKey => {
+    if (!dragField) return;
+    if (!draftVisible.includes(dragField)) addField(dragField);
+    if (targetKey && dragField !== targetKey) moveField(dragField, targetKey);
+    setDragField(null);
+  };
+
+  return <div className="fields-modal-backdrop" onClick={onClose}>
+    <div className="fields-modal" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()}>
+      <div className="fields-modal-head">
+        <h2>Selecteer te tonen velden</h2>
+        <button type="button" className="fields-close" onClick={onClose}>×</button>
+      </div>
+      <div className="fields-columns">
+        <section className="fields-panel" onDragOver={e => e.preventDefault()} onDrop={() => { if (dragField) { removeField(dragField); setDragField(null); } }}>
+          <h3>Lijst van beschikbare velden</h3>
+          <input className="field-search" placeholder="Zoek beschikbare velden" value={leftQuery} onChange={e => setLeftQuery(e.target.value)} />
+          <div className="field-list-box">
+            {available.map(field => <div className="field-option" draggable key={field.key} onDragStart={() => setDragField(field.key)} onDoubleClick={() => addField(field.key)}>
+              <span className="field-dot" />{field.label}
+            </div>)}
+          </div>
+        </section>
+        <section className="fields-panel selected" onDragOver={e => e.preventDefault()} onDrop={() => onDropSelected(null)}>
+          <h3>Selecteer velden</h3>
+          <input className="field-search" placeholder="Zoek geselecteerde velden" value={rightQuery} onChange={e => setRightQuery(e.target.value)} />
+          <div className="field-list-box">
+            {selected.map((field, index) => <div className="field-option selected-field" draggable key={field.key} onDragStart={() => setDragField(field.key)} onDragOver={e => e.preventDefault()} onDrop={(e) => { e.stopPropagation(); onDropSelected(field.key); }} onDoubleClick={() => removeField(field.key)}>
+              <span className="sort-handle">☰</span>{field.label}{index === 2 && <span className="sort-active">↓</span>}
+            </div>)}
+          </div>
+        </section>
+      </div>
+      <p className="field-note">Click ● om te sorteren ↑↓</p>
+      <div className="fields-modal-actions">
+        <button type="button" className="modal-btn" onClick={() => setDraftVisible(defaultVisibleFields)}>Herstel</button>
+        <button type="button" className="modal-btn primary" onClick={() => onSave(draftVisible)}>Opslaan</button>
+      </div>
+    </div>
+  </div>;
+}
+
+function TableView({ cards, query, setQuery, visibleFields, setVisibleFields, activeView, setActiveView }) {
+  const tableWrapRef = useRef(null);
+  const [showFieldsModal, setShowFieldsModal] = useState(false);
+  const filteredCards = cards.filter(c => (c.customer + ' ' + c.projectId + ' ' + c.description + ' ' + c.location + ' ' + c.activities.join(' ')).toLowerCase().includes(query.toLowerCase()));
+  const scrollBy = amount => tableWrapRef.current?.scrollBy({ left: amount, behavior: 'smooth' });
+  return <section className="table-overview-card">
+    <div className="table-overview-head">
+      <h2>Tabel Planning Overzicht</h2>
+      <div className="table-head-actions">
+        <ViewToggle activeView={activeView} onChange={setActiveView} />
+        <select className="period-select"><option>04 &lt; Last 1 month</option><option>03 &lt; Last 2 months</option><option>02 &lt; Current quarter</option></select>
+        <button className="icon-btn" type="button" title="Settings">⚙</button>
+        <button className="icon-btn filled" type="button" title="Refresh">↔</button>
+        <button className="export-btn" type="button">Exporteren <span>⇩</span><span>⌄</span></button>
+      </div>
+    </div>
+    <div className="table-toolbar">
+      <button className="zoom-btn" type="button">100%</button>
+      <span className="rows-info">Aantal rijen per pagina, totaal {filteredCards.length}</span>
+      <div className="table-toolbar-right">
+        <div className="scroll-actions">
+          <button className="scroll-btn" type="button" onClick={() => scrollBy(-360)}>‹ Scroll left</button>
+          <button className="scroll-btn" type="button" onClick={() => scrollBy(360)}>Scroll right ›</button>
+        </div>
+        <button className="toon-velden-btn" type="button" onClick={() => setShowFieldsModal(true)}>Toon velden</button>
+        <div className="table-search">
+          <input value={query} onChange={e => setQuery(e.target.value)} placeholder="Zoeken in planning" />
+          <button type="button" aria-label="Search">⌕</button>
+        </div>
+      </div>
+    </div>
+    <div className="planning-table-wrap" ref={tableWrapRef}>
+      <table className="planning-table">
+        <thead>
+          <tr><th className="check-col"><input type="checkbox" /></th>{visibleFields.map(key => <th key={key}>{getField(key)?.label || key}{key === 'startDate' && <span className="sort-arrow">↓</span>}</th>)}</tr>
+          <tr className="filter-row"><td></td>{visibleFields.map(key => <td key={key}><input placeholder={key === 'startDate' ? '< Date now - Last month' : ''} /><span className="cell-search">⌕</span></td>)}</tr>
+        </thead>
+        <tbody>
+          {filteredCards.map((card, rowIndex) => <tr key={card.id} className={rowIndex % 2 ? 'alt' : ''}>
+            <td><input type="checkbox" /></td>
+            {visibleFields.map(key => {
+              const field = getField(key);
+              const value = field?.get(card) || '';
+              if (key === 'projectStatus' || key === 'planningStatus' || key === 'receiptStatus') return <td key={key}><TableStatusBadge value={value} /></td>;
+              if (key === 'executionType' || key === 'workType') return <td key={key}>{String(value).split(', ').map(tag => <span className="type-tag" key={tag}>{tag}</span>)}</td>;
+              if (key === 'color') return <td key={key}><span className="color-dot" /></td>;
+              return <td key={key}>{value}</td>;
+            })}
+          </tr>)}
+        </tbody>
+      </table>
+    </div>
+    {showFieldsModal && <FieldSelectionModal visibleFields={visibleFields} onClose={() => setShowFieldsModal(false)} onSave={(fields) => { setVisibleFields(fields); setShowFieldsModal(false); }} onReset={() => setVisibleFields(defaultVisibleFields)} />}
+  </section>;
+}
+
+function CardBoardView({ cards, shown, dates, week, setWeek, query, setQuery, draggedId, setDraggedId, setCards, setActiveId }) {
+  return <>
+    <section className="date-board-wrap"><div className="date-board">{dates.map((d, i) => { const laneCards = shown.filter(c => c.lane === i); return <div className={`date-lane ${i === 2 ? 'today' : ''}`} key={i} onDragOver={e => e.preventDefault()} onDrop={() => { if (draggedId) { setCards(cs => cs.map(c => c.id === draggedId ? { ...c, lane: i, muted: false } : c)); setDraggedId(null); } }}><div className="date-head"><span>{formatShort(d)}</span>{i === 2 && <strong>Today</strong>}<em>{laneCards.length}</em></div>{laneCards.map(card => <Card key={card.id} card={card} onOpen={setActiveId} onDragStart={setDraggedId} />)}</div>; })}</div></section>
+  </>;
+}
+
 function App() {
   const [loggedIn, setLoggedIn] = useState(false);
+  const [activeView, setActiveView] = useState('table');
   const [week, setWeek] = useState(25);
   const [query, setQuery] = useState('');
   const [cards, setCards] = useState(initialCards);
+  const [visibleFields, setVisibleFields] = useState(defaultVisibleFields);
   const [draggedId, setDraggedId] = useState(null);
   const [activeId, setActiveId] = useState(null);
   const dates = useMemo(() => { const monday = isoWeekStart(week, 2026); return Array.from({ length: 5 }, (_, i) => { const d = new Date(monday); d.setDate(monday.getDate() + i); return d; }); }, [week]);
@@ -175,8 +345,18 @@ function App() {
   if (!loggedIn) return <section className="login-page"><div className="login-card"><Brand /><h1>Portal Login</h1><p>Sign in to continue to Related Planning Data.</p><label>Username</label><input placeholder="Enter username" /><label>Password</label><input type="password" placeholder="Enter password" onKeyDown={e => e.key === 'Enter' && setLoggedIn(true)} /><button onClick={() => setLoggedIn(true)}>Login</button><small>No credentials needed for this prototype.</small></div></section>;
   return <div className="app-shell">
     <header className="portal-header"><Brand /><nav className="portal-nav"><a href="#">CUSTOMERS <span>⌄</span></a><a href="#">PROJECTS <span>⌄</span></a><a href="#">PLANNING LINES</a><a href="#">SALES <span>⌄</span></a><a href="#">PURCHASE <span>⌄</span></a><a href="#">MESSAGE VIEW</a><a href="#">TABLES <span>⌄</span></a><a href="#">SYSTEM <span>⌄</span></a></nav><div className="user-area"><span>Hello <b>Karel 2</b></span><img src="https://i.pravatar.cc/80?img=12" alt="Karel" /></div></header>
-    <main className="related-page"><section className="related-toolbar"><div className="toolbar-title"><h1>Related Planning Data</h1><p>All project planning lines are listed here. Drag cards between date columns.</p></div><div className="toolbar-actions"><div className="week-control"><button className="nav-round" onClick={() => setWeek(w => Math.max(1, w - 1))}>‹</button><span className="week-badge">W{week}</span><select value={week} onChange={e => setWeek(Number(e.target.value))}>{weeks.map(w => <option key={w} value={w}>W{w}</option>)}</select><strong>{formatShort(dates[0])} - {formatShort(dates[4])} 2026</strong><button className="nav-round" onClick={() => setWeek(w => Math.min(53, w + 1))}>›</button></div><div className="toolbar-search"><input placeholder="Search related data" value={query} onChange={e => setQuery(e.target.value)} /></div></div></section>
-      <section className="date-board-wrap"><div className="date-board">{dates.map((d, i) => { const laneCards = shown.filter(c => c.lane === i); return <div className={`date-lane ${i === 2 ? 'today' : ''}`} key={i} onDragOver={e => e.preventDefault()} onDrop={() => { if (draggedId) { setCards(cs => cs.map(c => c.id === draggedId ? { ...c, lane: i, muted: false } : c)); setDraggedId(null); } }}><div className="date-head"><span>{formatShort(d)}</span>{i === 2 && <strong>Today</strong>}<em>{laneCards.length}</em></div>{laneCards.map(card => <Card key={card.id} card={card} onOpen={setActiveId} onDragStart={setDraggedId} />)}</div>; })}</div></section>
+    <main className="related-page">
+      {activeView === 'card' && <section className="related-toolbar">
+        <div className="toolbar-title"><h1>Related Planning Data</h1><p>All project planning lines are listed here. Drag cards between date columns.</p></div>
+        <div className="toolbar-actions">
+          <ViewToggle activeView={activeView} onChange={setActiveView} />
+          <div className="week-control"><button className="nav-round" onClick={() => setWeek(w => Math.max(1, w - 1))}>‹</button><span className="week-badge">W{week}</span><select value={week} onChange={e => setWeek(Number(e.target.value))}>{weeks.map(w => <option key={w} value={w}>W{w}</option>)}</select><strong>{formatShort(dates[0])} - {formatShort(dates[4])} 2026</strong><button className="nav-round" onClick={() => setWeek(w => Math.min(53, w + 1))}>›</button></div>
+          <div className="toolbar-search"><input placeholder="Search related data" value={query} onChange={e => setQuery(e.target.value)} /></div>
+        </div>
+      </section>}
+      {activeView === 'table'
+        ? <TableView cards={cards} query={query} setQuery={setQuery} visibleFields={visibleFields} setVisibleFields={setVisibleFields} activeView={activeView} setActiveView={setActiveView} />
+        : <CardBoardView cards={cards} shown={shown} dates={dates} week={week} setWeek={setWeek} query={query} setQuery={setQuery} draggedId={draggedId} setDraggedId={setDraggedId} setCards={setCards} setActiveId={setActiveId} />}
     </main>
     <DetailModal card={activeCard} onClose={() => setActiveId(null)} onSave={(updated) => { setCards(cs => cs.map(c => c.id === updated.id ? updated : c)); setActiveId(null); }} />
   </div>;
